@@ -2,6 +2,7 @@
 
 name: Advanced Selenium UI Tests
 
+
 on:
   pull_request:
     branches:
@@ -137,7 +138,7 @@ jobs:
           github_token: ${{ secrets.UI_TESTING_GITHUB_TOKEN }}
           publish_dir: allure-history
 
-          
+
 # name: Advanced Selenium UI Tests
 
 # on:
