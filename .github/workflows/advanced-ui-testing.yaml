@@ -89,6 +89,9 @@ jobs:
         OLLAMA_URL: "http://54.247.218.220:3000"
         TEST_NAME: ${{ matrix.browser }}-${{ matrix.resolution.name }}
       run: |
+        mkdir -p allure-results
+        # Run your tests here with unique result directory
+        pytest --alluredir=allure-results tests/
         pytest tests/ -v --tb=short
 
     - name: Upload Allure results as artifact
