@@ -59,6 +59,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install allure-pytest
         
     - name: Install Chrome and ChromeDriver
       if: matrix.browser == 'chrome'
