@@ -11,7 +11,7 @@ interface State {
   base64Images: string[] | null;
   chats: Record<string, ChatSession>;
   currentChatId: string | null;
-  selectedModel: string | null;
+  selectedModel: string ;
   userName: string | "Anonymous";
   isDownloading: boolean;
   downloadProgress: number;
@@ -38,7 +38,7 @@ const useChatStore = create<State & Actions>()(
       base64Images: null,
       chats: {},
       currentChatId: null,
-      selectedModel: null,
+      selectedModel: "yolo",
       userName: "Anonymous",
       isDownloading: false,
       downloadProgress: 0,
@@ -48,7 +48,7 @@ const useChatStore = create<State & Actions>()(
       setUserName: (userName) => set({ userName }),
 
       setCurrentChatId: (chatId) => set({ currentChatId: chatId }),
-      setSelectedModel: (selectedModel) => set({ selectedModel }),
+      setSelectedModel: (selectedModel) => {},
       getChatById: (chatId) => {
         const state = get();
         return state.chats[chatId];

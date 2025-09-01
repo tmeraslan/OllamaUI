@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   // Destructure request data
-  const { messages, selectedModel, data } = await req.json();
+  const { messages, data } = await req.json();
 
   // Remove experimental_attachments from each message
   const cleanedMessages = messages.map((message: any) => {

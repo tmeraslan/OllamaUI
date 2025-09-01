@@ -19,7 +19,7 @@ import { Button } from "../ui/button";
 import { CaretSortIcon, HamburgerMenuIcon } from "@radix-ui/react-icons";
 import { Sidebar } from "../sidebar";
 import { Message } from "ai/react";
-import { getSelectedModel } from "@/lib/model-helper";
+// import { getSelectedModel } from "@/lib/model-helper";
 import useChatStore from "@/app/hooks/useChatStore";
 
 interface ChatTopbarProps {
@@ -93,7 +93,7 @@ export default function ChatTopbar({
             aria-expanded={open}
             className="w-[300px] justify-between"
           >
-            {selectedModel || "Select model"}
+            {/* {selectedModel || "Select model"} */}
             <CaretSortIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>

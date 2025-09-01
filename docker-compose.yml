@@ -17,7 +17,7 @@ services:
       - ./uploads:/app/uploads
 
   ollama-ui:
-    image: tameer/ollamaui:0.0.1
+    image: tameer/ollamaui:0.0.3
     ports:
       - "3000:3000"
     environment:
