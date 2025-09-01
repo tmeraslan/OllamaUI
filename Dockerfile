@@ -30,6 +30,7 @@ COPY --from=builder /app/node_modules ./node_modules
 ENV OLLAMA_URL=http://127.0.0.1:11434
 ENV PORT=3000
 
+
 EXPOSE 3000
 
 CMD ["npm", "start"]
