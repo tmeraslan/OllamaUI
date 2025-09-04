@@ -1,1 +1,0 @@
-[{"values":["http://34.243.128.115:3000/"],"name":"Target.URL"},{"values":["7d02fd3aa3a1e3343aad45f099870127fee67deb"],"name":"Commit"},{"values":["tameer/ollama-ui:"],"name":"OllamaUI.Image"},{"values":["yosefshawah/yolo:0.0.3"],"name":"YOLO.Image"},{"values":["postgres:15"],"name":"Postgres.Image"},{"values":["GitHub Actions"],"name":"CI.Platform"}]
