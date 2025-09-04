@@ -1,1 +1,0 @@
-WARNING  urllib3.connectionpool:connectionpool.py:868 Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ReadTimeoutError("HTTPConnectionPool(host='localhost', port=60245): Read timed out. (read timeout=120)")': /session/f32349e6d1bd8f69ca5d6746922a9c52
