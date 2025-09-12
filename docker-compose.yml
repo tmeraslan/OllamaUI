@@ -48,7 +48,7 @@ services:
       DB_BACKEND: postgres
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
       # Rabbit
-      RABBIT_URL: ${RABBIT_URL:-amqp://guest:guest@rabbitmq:5672}
+      RABBIT_URL: amqp://user:pass@rabbitmq:5672
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
     ports:
@@ -75,7 +75,7 @@ services:
       DB_BACKEND: postgres
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
       # Rabbit
-      RABBIT_URL: ${RABBIT_URL:-amqp://guest:guest@rabbitmq:5672}
+      RABBIT_URL: amqp://user:pass@rabbitmq:5672
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
     volumes:
