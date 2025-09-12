@@ -1,20 +1,10 @@
-
-
-
-
-
-
-
-
-# # .github/workflows/e2e-testing.yml
-
-
+# .github/workflows/e2e-testing.yml
 name: Simple Deploy to EC2
 
 on:
   pull_request:
     branches: [ master ]
-    
+
 permissions:
   contents: read
   deployments: write
@@ -84,12 +74,16 @@ jobs:
             cat > .env <<EOF
             DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
             OLLAMA_UI_IMG_TAG=${{ env.IMAGE_TAG }}
+            # Fallback (למקרה שיש קומפוז ישן שמצפה למשתנה אחד):
+            OLLAMA_UI_IMG=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ env.IMAGE_TAG }}
 
             # Services
             YOLO_SERVICE=http://yolo:8081
 
-            # RabbitMQ inside Docker network (NOT localhost)
-            RABBIT_URL=amqp://guest:guest@rabbitmq:5672
+            # RabbitMQ (עקבי עם compose)
+            RABBIT_USER=app
+            RABBIT_PASS=secret
+            RABBIT_URL=amqp://app:secret@rabbitmq:5672
             JOBS_QUEUE=img_jobs
             RESULTS_EX=img.results
 
@@ -131,20 +125,19 @@ jobs:
             df -h || true
             sudo docker system df || true
 
-            # Deployment
-            sudo docker compose --env-file .env pull
-            sudo docker compose --env-file .env down || true
-            sudo docker compose --env-file .env up -d
-            sudo docker compose --env-file .env ps
+            # Deployment (ממתין ל-healthchecks)
+            sudo docker compose -f docker-compose.yml --env-file .env pull
+            sudo docker compose -f docker-compose.yml --env-file .env down || true
+            sudo docker compose -f docker-compose.yml --env-file .env up -d --wait
+            sudo docker compose -f docker-compose.yml --env-file .env ps
 
-            # Quick health checks & recent logs
+            # Quick logs
             sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-            sudo docker compose logs --tail=60 rabbitmq || true
-            sudo docker compose logs --tail=60 yolo || true
-            sudo docker compose logs --tail=60 ollama-ui || true
+            sudo docker compose --env-file .env logs --since=10m --no-color rabbitmq yolo yolo-worker ollama-ui || true
 
-            curl -fSs http://localhost:3000/ >/dev/null && echo "UI OK" || (echo "UI not responding" && exit 1)
-            curl -fSs http://localhost:8081/docs >/dev/null && echo "YOLO OK" || echo "YOLO docs not reachable (optional)"
+            # Sanity checks
+            curl -fsS http://localhost:3000/ >/dev/null && echo "UI OK" || (echo "UI not responding" && exit 1)
+            curl -fsS http://localhost:8081/docs >/dev/null && echo "YOLO OK" || echo "YOLO docs not reachable (optional)"
 
   selenium-matrix-tests:
     runs-on: ubuntu-latest
@@ -334,6 +327,7 @@ jobs:
         with:
           github_token: ${{ secrets.UI_TESTING_GITHUB_TOKEN }}
           publish_dir: allure-history
+
 
             
 

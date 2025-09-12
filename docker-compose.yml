@@ -1,3 +1,4 @@
+# docker-compose.yml
 services:
   postgres:
     image: postgres:16
@@ -51,8 +52,8 @@ services:
       # DB
       DB_BACKEND: postgres
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
-      # Rabbit (אותה כתובת לכולם)
-      RABBIT_URL: ${RABBIT_URL}
+      # Rabbit (אותה כתובת לכולם) עם ברירת־מחדל עקבית
+      RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
     ports:
@@ -85,8 +86,8 @@ services:
       # DB
       DB_BACKEND: postgres
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
-      # Rabbit (אותה כתובת לכולם)
-      RABBIT_URL: ${RABBIT_URL}
+      # Rabbit (אותה כתובת לכולם) עם ברירת־מחדל עקבית
+      RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
     volumes:
@@ -110,8 +111,8 @@ services:
       AWS_S3_BUCKET: ${AWS_S3_BUCKET}
       # YOLO API בתוך רשת הדוקר
       YOLO_SERVICE: http://yolo:8081
-      # RabbitMQ (אותה כתובת)
-      RABBIT_URL: ${RABBIT_URL}
+      # RabbitMQ (אותה כתובת) עם ברירת־מחדל עקבית
+      RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
     ports:
@@ -127,6 +128,7 @@ services:
 
 volumes:
   postgres_data:
+
 
 
 
