@@ -64,6 +64,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./uploads:/app/uploads
+    command: /bin/sh -c "pip install --no-cache-dir pika && python /app/worker_receive.py"
     environment:
       AWS_REGION: ${AWS_REGION}
       AWS_S3_BUCKET: ${AWS_S3_BUCKET}
