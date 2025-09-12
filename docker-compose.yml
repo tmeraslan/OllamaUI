@@ -1,7 +1,7 @@
 # docker-compose.yml
 services:
   postgres:
-    image: postgres:16
+    image: postgres:${POSTGRES_VERSION:-16}
     container_name: postgres
     restart: unless-stopped
     environment:
@@ -26,7 +26,6 @@ services:
       - "5672:5672"
       - "15672:15672"
     environment:
-      # משתמש עקבי לכל המערכת (לא guest)
       RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-app}
       RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-secret}
     healthcheck:
@@ -35,7 +34,8 @@ services:
       timeout: 3s
       retries: 30
 
-  yolo-api:
+  # YOLO API (FastAPI + /docs)
+  yolo:
     image: ${YOLO_IMAGE:-tameer/yolo:0.0.4}
     container_name: yolo
     restart: unless-stopped
@@ -52,7 +52,7 @@ services:
       # DB
       DB_BACKEND: postgres
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
-      # Rabbit (אותה כתובת לכולם) עם ברירת־מחדל עקבית
+      # Rabbit
       RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
@@ -62,13 +62,13 @@ services:
       - ./uploads:/app/uploads
     command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8081"]
     healthcheck:
-      # בדיקת TCP פשוטה
       test: ["CMD", "python", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8081)); s.close()"]
       interval: 5s
       timeout: 3s
       retries: 30
       start_period: 5s
 
+  # Worker שמאזין ל-RabbitMQ ומריץ YOLO
   yolo-worker:
     image: ${YOLO_IMAGE:-tameer/yolo:0.0.4}
     container_name: yolo-worker
@@ -86,21 +86,21 @@ services:
       # DB
       DB_BACKEND: postgres
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
-      # Rabbit (אותה כתובת לכולם) עם ברירת־מחדל עקבית
+      # Rabbit
       RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
     volumes:
       - ./uploads:/app/uploads
     command: ["python", "worker_receive.py"]
-    # healthcheck לא חובה כאן
 
+  # Next.js UI (Ollama UI)
   ollama-ui:
-    image: ${DOCKERHUB_USERNAME}/ollama-ui:${OLLAMA_UI_IMG_TAG}
+    image: ${OLLAMA_UI_IMG:?set OLLAMA_UI_IMG in .env}
     container_name: ollama-ui
     restart: unless-stopped
     depends_on:
-      yolo-api:
+      yolo:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -110,8 +110,8 @@ services:
       AWS_REGION: ${AWS_REGION:-eu-west-1}
       AWS_S3_BUCKET: ${AWS_S3_BUCKET}
       # YOLO API בתוך רשת הדוקר
-      YOLO_SERVICE: http://yolo:8081
-      # RabbitMQ (אותה כתובת) עם ברירת־מחדל עקבית
+      YOLO_SERVICE: ${YOLO_SERVICE:-http://yolo:8081}
+      # Rabbit (אותה כתובת)
       RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
@@ -119,7 +119,6 @@ services:
       - "${OLLAMA_PORT:-3000}:3000"
     command: ["npm", "start", "--", "-H", "0.0.0.0"]
     healthcheck:
-      # בדיקת פתיחת פורט בעזרת node (לא תלוי ב-curl/wget)
       test: ["CMD", "node", "-e", "require('net').createConnection({host:'localhost',port:3000},()=>process.exit(0)).on('error',()=>process.exit(1)); setTimeout(()=>process.exit(1),2000)"]
       interval: 5s
       timeout: 3s
