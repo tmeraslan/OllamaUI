@@ -31,7 +31,7 @@ services:
       retries: 30
 
   yolo-api:
-    image: tameer/yolo:0.0.3
+    image: tameer/yolo:0.0.4
     container_name: yolo
     restart: unless-stopped
     depends_on:
@@ -58,7 +58,7 @@ services:
     command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8081"]
 
   yolo-worker:
-    image: tameer/yolo:0.0.3
+    image: tameer/yolo:0.0.4
     container_name: yolo-worker
     restart: unless-stopped
     depends_on:
@@ -97,7 +97,7 @@ services:
       AWS_REGION: ${AWS_REGION:-eu-west-1}
       AWS_S3_BUCKET: ${AWS_S3_BUCKET}
       # YOLO API URL בתוך רשת הדוקר
-      YOLO_SERVICE: http://yolo-api:8081
+      YOLO_SERVICE: http://yolo:8081
       # RabbitMQ (שימוש ע"י src/lib/rabbit.ts)
       RABBIT_URL: ${RABBIT_URL:-amqp://guest:guest@rabbitmq:5672}
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
