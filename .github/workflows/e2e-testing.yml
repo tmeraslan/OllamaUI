@@ -1,11 +1,6 @@
 
 
 
-
-
-
-
-
 # # .github/workflows/e2e-testing.yml-OLLAMA
 
 
@@ -17,9 +12,9 @@ on:
   pull_request:
     branches: [ master ]
 
-concurrency:
-  group: pr-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+# concurrency:
+#   group: pr-${{ github.event.pull_request.number || github.ref }}
+#   cancel-in-progress: true
 
 jobs:
   deploy:
