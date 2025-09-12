@@ -1,9 +1,12 @@
 
 
 
+
+
+
+
+
 # # .github/workflows/e2e-testing.yml-OLLAMA
-
-
 
 
 name: Simple Deploy to EC2
@@ -11,10 +14,6 @@ name: Simple Deploy to EC2
 on:
   pull_request:
     branches: [ master ]
-
-# concurrency:
-#   group: pr-${{ github.event.pull_request.number || github.ref }}
-#   cancel-in-progress: true
 
 jobs:
   deploy:
@@ -34,16 +33,6 @@ jobs:
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:$TAG
           echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
           echo "image_tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Preflight: check SSH reachability
-        run: |
-          for i in {1..10}; do
-            if timeout 3 bash -lc "echo > /dev/tcp/${{ secrets.EC2_HOST }}/22"; then
-              echo "SSH reachable"; exit 0
-            fi
-            echo "Retry SSH... ($i)"; sleep 3
-          done
-          echo "EC2 port 22 not reachable"; exit 1
 
       - name: Copy docker-compose to EC2
         uses: appleboy/scp-action@v0.1.7
@@ -116,16 +105,23 @@ jobs:
             POSTGRES_PORT=5432
             EOF
 
+            ##############################
+            # Cleanup before pulling images
+            ##############################
             echo "=== Disk usage BEFORE ==="
             df -h || true
             sudo docker system df || true
 
-            # Safer sequence: bring app down, clean images/networks (keep volumes!), then pull & up
-            sudo docker compose --env-file .env down || true
-
-            # Clean *without* deleting volumes to avoid data loss
-            sudo docker system prune -af || true
+            # Stop all containers (note: may affect other services running on the server)
+            sudo docker stop $(sudo docker ps -aq) 2>/dev/null || true
+            # Aggressive Docker cleanup: unused images/containers/volumes
+            sudo docker system prune -af --volumes || true
+            # Clean build cache
             sudo docker builder prune -af || true
+
+            # Clean apt cache to free space
+            sudo apt-get clean || true
+            sudo rm -rf /var/lib/apt/lists/* || true
 
             echo "=== Disk usage AFTER CLEAN ==="
             df -h || true
@@ -133,6 +129,7 @@ jobs:
 
             # Deployment
             sudo docker compose --env-file .env pull
+            sudo docker compose --env-file .env down || true
             sudo docker compose --env-file .env up -d
             sudo docker compose --env-file .env ps
 
