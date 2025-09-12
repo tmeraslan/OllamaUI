@@ -37,7 +37,7 @@ services:
       retries: 12
 
   yolo:
-    image: tameer/yolo:0.0.4
+    image: tameer/yolo:0.0.5
     container_name: yolo
     restart: unless-stopped
     ports:
@@ -60,7 +60,7 @@ services:
         condition: service_healthy
 
   yolo-worker:
-    image: tameer/yolo:0.0.4
+    image: tameer/yolo:0.0.5
     container_name: yolo-worker
     restart: unless-stopped
     volumes:
