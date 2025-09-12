@@ -103,6 +103,7 @@ services:
       - yolo
     command: ["npm", "start", "--", "-H", "0.0.0.0"]
 
+
 volumes:
   postgres_data:
   rabbitmq_data:
