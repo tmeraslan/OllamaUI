@@ -67,36 +67,36 @@ jobs:
 
             # Create .env file for docker-compose (ללא RABBIT_URL ידני)
             cat > .env <<EOF
-# --- UI image (single var) ---
-OLLAMA_UI_IMG=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${TAG}
+            # --- UI image (single var) ---
+            OLLAMA_UI_IMG=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${TAG}
 
-# --- Optional override for YOLO image (אפשר להשאיר ריק ולהשתמש בברירת המחדל שב-compose) ---
-YOLO_IMAGE=tameer/yolo:0.0.4
+            # --- Optional override for YOLO image (אפשר להשאיר ריק ולהשתמש בברירת המחדל שב-compose) ---
+            YOLO_IMAGE=tameer/yolo:0.0.4
 
-# --- Services config ---
-YOLO_SERVICE=http://yolo:8081
+            # --- Services config ---
+            YOLO_SERVICE=http://yolo:8081
 
-# RabbitMQ (אין RABBIT_URL - יורכב אוטומטית ב-compose)
-RABBIT_USER=app
-RABBIT_PASS=secret
-JOBS_QUEUE=img_jobs
-RESULTS_EX=img.results
+            # RabbitMQ (אין RABBIT_URL - יורכב אוטומטית ב-compose)
+            RABBIT_USER=app
+            RABBIT_PASS=secret
+            JOBS_QUEUE=img_jobs
+            RESULTS_EX=img.results
 
-# AWS/S3
-AWS_REGION=eu-west-1
-AWS_S3_BUCKET=tameer-yolo-images
+            # AWS/S3
+            AWS_REGION=eu-west-1
+            AWS_S3_BUCKET=tameer-yolo-images
 
-# Postgres
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgrespass
-POSTGRES_DB=predictions
-POSTGRES_VERSION=16
+            # Postgres
+            POSTGRES_USER=postgres
+            POSTGRES_PASSWORD=postgrespass
+            POSTGRES_DB=predictions
+            POSTGRES_VERSION=16
 
-# Ports
-YOLO_PORT=8081
-OLLAMA_PORT=3000
-POSTGRES_PORT=5432
-EOF
+            # Ports
+            YOLO_PORT=8081
+            OLLAMA_PORT=3000
+            POSTGRES_PORT=5432
+            EOF
 
             echo "--- .env on server (sanity, redacted) ---"
             sudo sed 's/^\(.*_PASSWORD\|.*_PASS\|.*_SECRET\|.*_KEY\).*/\1=*** REDACTED ***/' .env || true
