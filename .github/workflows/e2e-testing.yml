@@ -40,6 +40,9 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          timeout: 10m
+          command_timeout: 10m
           source: "docker-compose.yml"
           target: "/home/ubuntu/"
 
@@ -49,6 +52,9 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          timeout: 60m
+          command_timeout: 60m
           script: |
             set -euo pipefail
             cd /home/ubuntu
@@ -75,16 +81,25 @@ jobs:
             DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
             OLLAMA_UI_IMG_TAG=${{ env.IMAGE_TAG }}
 
+            # Services
             YOLO_SERVICE=http://yolo:8081
 
+            # RabbitMQ inside Docker network (NOT localhost)
+            RABBIT_URL=amqp://guest:guest@rabbitmq:5672
+            JOBS_QUEUE=img_jobs
+            RESULTS_EX=img.results
+
+            # AWS/S3
             AWS_REGION=eu-west-1
             AWS_S3_BUCKET=tameer-yolo-images
 
+            # Postgres
             POSTGRES_USER=postgres
             POSTGRES_PASSWORD=postgrespass
             POSTGRES_DB=predictions
             POSTGRES_VERSION=16
 
+            # Ports
             YOLO_PORT=8081
             OLLAMA_PORT=3000
             POSTGRES_PORT=5432
@@ -117,6 +132,15 @@ jobs:
             sudo docker compose --env-file .env down || true
             sudo docker compose --env-file .env up -d
             sudo docker compose --env-file .env ps
+
+            # Quick health checks & recent logs
+            sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+            sudo docker compose logs --tail=60 rabbitmq || true
+            sudo docker compose logs --tail=60 yolo || true
+            sudo docker compose logs --tail=60 ollama-ui || true
+
+            curl -fSs http://localhost:3000/ >/dev/null && echo "UI OK" || (echo "UI not responding" && exit 1)
+            curl -fSs http://localhost:8081/docs >/dev/null && echo "YOLO OK" || echo "YOLO docs not reachable (optional)"
 
   selenium-matrix-tests:
     runs-on: ubuntu-latest
@@ -163,7 +187,7 @@ jobs:
         env:
           URL: http://${{ secrets.EC2_HOST }}:3000/
         run: |
-          for i in {1..60}; do
+          for i in {1..120}; do
             if curl -fsS "$URL" >/dev/null; then
               echo "App is up: $URL"
               exit 0
@@ -182,7 +206,7 @@ jobs:
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
           YOLO.Image=tameer/yolo:991e7ebc1a6fbd6136517e56d68bdf843b749ef9-20250903-071354
-          Postgres.Image=postgres:15
+          Postgres.Image=postgres:16
           CI.Platform=GitHub Actions
           EOF
 
@@ -285,7 +309,7 @@ jobs:
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
           YOLO.Image=tameer/yolo:991e7ebc1a6fbd6136517e56d68bdf843b749ef9-20250903-071354
-          Postgres.Image=postgres:15
+          Postgres.Image=postgres:16
           CI.Platform=GitHub Actions
           EOF
 
@@ -306,6 +330,7 @@ jobs:
         with:
           github_token: ${{ secrets.UI_TESTING_GITHUB_TOKEN }}
           publish_dir: allure-history
+
             
 
 
