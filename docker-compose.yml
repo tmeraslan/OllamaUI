@@ -95,7 +95,7 @@ services:
     # healthcheck לא חובה כאן
 
   ollama-ui:
-    image: ${OLLAMA_UI_IMG}
+    image: ${DOCKERHUB_USERNAME}/ollama-ui:${OLLAMA_UI_IMG_TAG}
     container_name: ollama-ui
     restart: unless-stopped
     depends_on:
