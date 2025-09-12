@@ -1,5 +1,22 @@
-# docker-compose.yml
 services:
+  rabbitmq:
+    image: rabbitmq:4.0-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-app}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-secret}
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # Mgmt UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
   postgres:
     image: postgres:${POSTGRES_VERSION:-16}
     container_name: postgres
@@ -12,121 +29,70 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
 
-  rabbitmq:
-    image: rabbitmq:4.0-management
-    container_name: rabbitmq
-    restart: unless-stopped
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-app}
-      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-secret}
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-
-  # YOLO API (FastAPI + /docs)
   yolo:
     image: ${YOLO_IMAGE:-tameer/yolo:0.0.4}
     container_name: yolo
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    environment:
-      PYTHONUNBUFFERED: "1"
-      # S3
-      AWS_REGION: ${AWS_REGION:-eu-west-1}
-      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
-      # DB
-      DB_BACKEND: postgres
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
-      # Rabbit
-      RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
-      JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
-      RESULTS_EX: ${RESULTS_EX:-img.results}
     ports:
       - "${YOLO_PORT:-8081}:8081"
     volumes:
       - ./uploads:/app/uploads
-    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8081"]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8081)); s.close()"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-      start_period: 5s
+    environment:
+      PYTHONUNBUFFERED: "1"
+      AWS_REGION: ${AWS_REGION:-eu-west-1}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-tameer-yolo-images}
 
-  # Worker שמאזין ל-RabbitMQ ומריץ YOLO
+      DB_BACKEND: postgres
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
+
+      # אין צורך ב-RABBIT_URL ב-.env; זה יורכב אוטומטית מהמשתנים למטה
+      RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
+      JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
+      RESULTS_EX: ${RESULTS_EX:-img.results}
+    depends_on:
+      - postgres
+      - rabbitmq
+
   yolo-worker:
     image: ${YOLO_IMAGE:-tameer/yolo:0.0.4}
     container_name: yolo-worker
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
-      # S3
       AWS_REGION: ${AWS_REGION:-eu-west-1}
-      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
-      # DB
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-tameer-yolo-images}
+
       DB_BACKEND: postgres
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
-      # Rabbit
+
       RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
-    volumes:
-      - ./uploads:/app/uploads
+    depends_on:
+      - rabbitmq
+      - postgres
+    # ודא שהקובץ קיים בתמונה; שנה אם צריך (למשל worker.py / -m module)
     command: ["python", "worker_receive.py"]
 
-  # Next.js UI (Ollama UI)
   ollama-ui:
-    image: ${OLLAMA_UI_IMG:?set OLLAMA_UI_IMG in .env}
+    # אפשרות B: משתנה יחיד עם שם התמונה המלא
+    image: ${OLLAMA_UI_IMG}
     container_name: ollama-ui
     restart: unless-stopped
-    depends_on:
-      yolo:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    environment:
-      PORT: "3000"
-      # S3
-      AWS_REGION: ${AWS_REGION:-eu-west-1}
-      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
-      # YOLO API בתוך רשת הדוקר
-      YOLO_SERVICE: ${YOLO_SERVICE:-http://yolo:8081}
-      # Rabbit (אותה כתובת)
-      RABBIT_URL: ${RABBIT_URL:-amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672}
-      JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
-      RESULTS_EX: ${RESULTS_EX:-img.results}
     ports:
       - "${OLLAMA_PORT:-3000}:3000"
-    command: ["npm", "start", "--", "-H", "0.0.0.0"]
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('net').createConnection({host:'localhost',port:3000},()=>process.exit(0)).on('error',()=>process.exit(1)); setTimeout(()=>process.exit(1),2000)"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-      start_period: 5s
+    environment:
+      PORT: "3000"
+      AWS_REGION: ${AWS_REGION:-eu-west-1}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-tameer-yolo-images}
+      YOLO_SERVICE: ${YOLO_SERVICE:-http://yolo:8081}
+    depends_on:
+      - yolo
 
 volumes:
   postgres_data:
+  rabbitmq_data:
 
 
 
