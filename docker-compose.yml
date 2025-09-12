@@ -32,7 +32,7 @@ services:
 
   yolo-api:
     image: tameer/yolo:0.0.3
-    container_name: yolo-api
+    container_name: yolo
     restart: unless-stopped
     depends_on:
       postgres:

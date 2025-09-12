@@ -6,7 +6,7 @@
 
 
 
-# # .github/workflows/e2e-testing.yml-OLLAMA
+# # .github/workflows/e2e-testing.yml
 
 
 name: Simple Deploy to EC2
