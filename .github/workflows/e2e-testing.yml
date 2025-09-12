@@ -1,5 +1,11 @@
 # .github/workflows/e2e-testing.yml
 
+# # .github/workflows/e2e-testing.yml
+
+
+# # .github/workflows/e2e-testing.yml
+
+
 name: Simple Deploy to EC2
 
 on:
@@ -44,7 +50,7 @@ jobs:
             set -euo pipefail
             cd /home/ubuntu
 
-            # Remove Podman and ensure Docker + compose are installed
+            # Remove Podman (conflicts with Docker) and install Docker if not already installed
             sudo apt-get remove -y podman-docker podman || true
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update -y
@@ -61,45 +67,25 @@ jobs:
             echo "${{ secrets.DOCKERHUB_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
             sudo mkdir -p uploads
 
-            # Option B: משתנה יחיד שמצביע על התמונה המלאה
-            TAG="${{ env.IMAGE_TAG }}"
-            if [ -z "$TAG" ]; then echo "❌ image_tag is empty"; exit 1; fi
-
-            # Create .env file for docker-compose (ללא RABBIT_URL ידני)
+            # Create .env file for docker-compose
             cat > .env <<EOF
-            # --- UI image (single var) ---
-            OLLAMA_UI_IMG=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${TAG}
+            DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
+            OLLAMA_UI_IMG_TAG=${{ env.IMAGE_TAG }}
 
-            # --- Optional override for YOLO image (אפשר להשאיר ריק ולהשתמש בברירת המחדל שב-compose) ---
-            YOLO_IMAGE=tameer/yolo:0.0.4
-
-            # --- Services config ---
             YOLO_SERVICE=http://yolo:8081
 
-            # RabbitMQ (אין RABBIT_URL - יורכב אוטומטית ב-compose)
-            RABBIT_USER=app
-            RABBIT_PASS=secret
-            JOBS_QUEUE=img_jobs
-            RESULTS_EX=img.results
-
-            # AWS/S3
             AWS_REGION=eu-west-1
             AWS_S3_BUCKET=tameer-yolo-images
 
-            # Postgres
             POSTGRES_USER=postgres
             POSTGRES_PASSWORD=postgrespass
             POSTGRES_DB=predictions
             POSTGRES_VERSION=16
 
-            # Ports
             YOLO_PORT=8081
             OLLAMA_PORT=3000
             POSTGRES_PORT=5432
             EOF
-
-            echo "--- .env on server (sanity, redacted) ---"
-            sudo sed 's/^\(.*_PASSWORD\|.*_PASS\|.*_SECRET\|.*_KEY\).*/\1=*** REDACTED ***/' .env || true
 
             ##############################
             # Cleanup before pulling images
@@ -123,15 +109,11 @@ jobs:
             df -h || true
             sudo docker system df || true
 
-            # Deployment (compose יטען את כל המשתנים מה-.env)
-            sudo docker compose -f docker-compose.yml --env-file .env pull
-            sudo docker compose -f docker-compose.yml --env-file .env down || true
-            sudo docker compose -f docker-compose.yml --env-file .env up -d --wait
-            sudo docker compose -f docker-compose.yml --env-file .env ps
-
-            # Quick logs
-            sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-            sudo docker compose -f docker-compose.yml --env-file .env logs --since=10m --no-color rabbitmq yolo yolo-worker ollama-ui || true
+            # Deployment
+            sudo docker compose --env-file .env pull
+            sudo docker compose --env-file .env down || true
+            sudo docker compose --env-file .env up -d
+            sudo docker compose --env-file .env ps
 
   selenium-matrix-tests:
     runs-on: ubuntu-latest
@@ -196,8 +178,8 @@ jobs:
           Target.URL=http://${{ secrets.EC2_HOST }}:3000/
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
-          YOLO.Image=tameer/yolo:0.0.4
-          Postgres.Image=postgres:16
+          YOLO.Image=tameer/yolo:991e7ebc1a6fbd6136517e56d68bdf843b749ef9-20250903-071354
+          Postgres.Image=postgres:15
           CI.Platform=GitHub Actions
           EOF
 
@@ -299,8 +281,8 @@ jobs:
           Target.URL=http://${{ secrets.EC2_HOST }}:3000/
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
-          YOLO.Image=tameer/yolo:0.0.4
-          Postgres.Image=postgres:16
+          YOLO.Image=tameer/yolo:991e7ebc1a6fbd6136517e56d68bdf843b749ef9-20250903-071354
+          Postgres.Image=postgres:15
           CI.Platform=GitHub Actions
           EOF
 
@@ -321,8 +303,6 @@ jobs:
         with:
           github_token: ${{ secrets.UI_TESTING_GITHUB_TOKEN }}
           publish_dir: allure-history
-
-
 
 
 
