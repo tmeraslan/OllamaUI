@@ -1,11 +1,9 @@
+# .github/workflows/e2e-testing.yml
+
+# # .github/workflows/e2e-testing.yml
 
 
-
-
-
-
-# # #e2e-testing.yml
-
+# # .github/workflows/e2e-testing.yml
 # # .github/workflows/e2e-testing.yml
 
 
@@ -307,10 +305,6 @@ jobs:
           github_token: ${{ secrets.UI_TESTING_GITHUB_TOKEN }}
           publish_dir: allure-history
             
-
-
-
-
 
 
 

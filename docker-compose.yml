@@ -1,7 +1,4 @@
-
 #docker-compose.yml
-
-
 
 services:
   postgres:
@@ -16,39 +13,85 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d predictions"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4.0-management-alpine
+    container_name: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-app}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-secret}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   yolo:
-    image: tameer/yolo:0.0.2
+    image: tameer/yolo:0.0.5   # מומלץ לאחד גרסה עם ה-worker
     container_name: yolo
+    restart: unless-stopped
     ports:
       - "8081:8081"
     volumes:
       - ./uploads:/app/uploads
-    restart: unless-stopped
     environment:
       PYTHONUNBUFFERED: "1"
       AWS_REGION: eu-west-1
       AWS_S3_BUCKET: tameer-yolo-images
       DB_BACKEND: postgres
       DATABASE_URL: postgresql+psycopg2://user:pass@postgres:5432/predictions
+      RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
+      JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
+      RESULTS_EX: ${RESULTS_EX:-img.results}
     depends_on:
       - postgres
+      - rabbitmq
+
+  yolo-worker:
+    image: tameer/yolo:0.0.5
+    container_name: yolo-worker
+    restart: unless-stopped
+    volumes:
+      - ./uploads:/app/uploads
+    environment:
+      AWS_REGION: eu-west-1
+      AWS_S3_BUCKET: tameer-yolo-images
+      DB_BACKEND: postgres
+      DATABASE_URL: postgresql+psycopg2://user:pass@postgres:5432/predictions
+      RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
+      JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
+      RESULTS_EX: ${RESULTS_EX:-img.results}
+    depends_on:
+      - postgres
+      - rabbitmq
+    command: ["python", "-u", "worker_receive.py"]
 
   ollama-ui:
     image: ${DOCKERHUB_USERNAME}/ollama-ui:${OLLAMA_UI_IMG_TAG}
     container_name: ollama-ui
+    restart: unless-stopped
     ports:
       - "3000:3000"
-    restart: unless-stopped
     environment:
       PORT: "3000"
       AWS_REGION: eu-west-1
       AWS_S3_BUCKET: tameer-yolo-images
-      
       YOLO_SERVICE: http://yolo:8081
+      RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
+      JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
+      RESULTS_EX: ${RESULTS_EX:-img.results}
     depends_on:
       - yolo
-    command: ["npm", "start", "--", "-H", "0.0.0.0"]
+      - rabbitmq
 
 volumes:
   postgres_data:
@@ -61,38 +104,41 @@ volumes:
 
 
 
-#docker-compose.yml
+
+
+
+# #docker-compose.yml
 
 
 
 # services:
 #   postgres:
-#     image: postgres:${POSTGRES_VERSION:-15}
+#     image: postgres:15
 #     container_name: postgres
 #     restart: unless-stopped
 #     environment:
-#       POSTGRES_USER: ${POSTGRES_USER:-user}
-#       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
-#       POSTGRES_DB: ${POSTGRES_DB:-predictions}
+#       POSTGRES_USER: user
+#       POSTGRES_PASSWORD: pass
+#       POSTGRES_DB: predictions
 #     ports:
-#       - "${POSTGRES_PORT:-5432}:5432"
+#       - "5432:5432"
 #     volumes:
 #       - postgres_data:/var/lib/postgresql/data
 
 #   yolo:
-#     image: ${YOLO_IMAGE:-tameer/yolo:latest}
+#     image: tameer/yolo:0.0.2
 #     container_name: yolo
 #     ports:
-#       - "${YOLO_PORT:-8081}:8081"
+#       - "8081:8081"
 #     volumes:
 #       - ./uploads:/app/uploads
 #     restart: unless-stopped
 #     environment:
 #       PYTHONUNBUFFERED: "1"
-#       AWS_REGION: ${AWS_REGION}
-#       AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+#       AWS_REGION: eu-west-1
+#       AWS_S3_BUCKET: tameer-yolo-images
 #       DB_BACKEND: postgres
-#       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@postgres:5432/${POSTGRES_DB:-predictions}
+#       DATABASE_URL: postgresql+psycopg2://user:pass@postgres:5432/predictions
 #     depends_on:
 #       - postgres
 
@@ -100,14 +146,14 @@ volumes:
 #     image: ${DOCKERHUB_USERNAME}/ollama-ui:${OLLAMA_UI_IMG_TAG}
 #     container_name: ollama-ui
 #     ports:
-#       - "${OLLAMA_PORT:-3000}:3000"
+#       - "3000:3000"
 #     restart: unless-stopped
 #     environment:
 #       PORT: "3000"
-#       # חשוב: השמות שה-UI מצפה להם
-#       AWS_REGION: ${AWS_REGION}
-#       AWS_S3_BUCKET: ${AWS_S3_BUCKET}
-#       YOLO_SERVICE: ${YOLO_SERVICE}
+#       AWS_REGION: eu-west-1
+#       AWS_S3_BUCKET: tameer-yolo-images
+      
+#       YOLO_SERVICE: http://yolo:8081
 #     depends_on:
 #       - yolo
 #     command: ["npm", "start", "--", "-H", "0.0.0.0"]
