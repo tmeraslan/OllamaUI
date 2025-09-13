@@ -17,7 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.build_push.outputs.image_tag }}
-
     steps:
       - name: Get code
         uses: actions/checkout@v4
@@ -32,7 +31,16 @@ jobs:
           echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
           echo "image_tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Deploy on EC2 via SSH (free space first + write compose)
+      - name: Copy docker-compose to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: "/home/ubuntu/"
+
+      - name: Deploy on EC2 via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -42,20 +50,8 @@ jobs:
             set -euo pipefail
             cd /home/ubuntu
 
-            # 0) EMERGENCY CLEANUP — לפני כתיבת קבצים (קריטי!)
-            sudo rm -rf /var/lib/apt/lists/* || true
-            sudo apt-get clean || true
-            sudo journalctl --vacuum-size=100M || true
-            sudo rm -rf /var/tmp/* /tmp/* || true
-            if command -v docker >/dev/null 2>&1; then
-              sudo docker stop $(sudo docker ps -aq) 2>/dev/null || true
-              sudo docker system prune -af --volumes || true
-              sudo docker builder prune -af || true
-            fi
-            df -h || true
-
-            # 1) התקנת Docker אם חסר + הפעלה
-            sudo apt-get purge -y podman-docker podman 2>/dev/null || true
+            # Remove Podman (conflicts with Docker) and install Docker if not already installed
+            sudo apt-get remove -y podman-docker podman || true
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update -y
               sudo apt-get install -y ca-certificates curl gnupg
@@ -71,21 +67,15 @@ jobs:
             echo "${{ secrets.DOCKERHUB_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
             sudo mkdir -p uploads
 
-            # 2) .env לדיפלוי
+            # Create .env file for docker-compose
             cat > .env <<EOF
             DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
             OLLAMA_UI_IMG_TAG=${{ env.IMAGE_TAG }}
-            YOLO_TAG=latest
 
             YOLO_SERVICE=http://yolo:8081
 
             AWS_REGION=eu-west-1
             AWS_S3_BUCKET=tameer-yolo-images
-
-            RABBIT_USER=app
-            RABBIT_PASS=secret
-            JOBS_QUEUE=img_jobs
-            RESULTS_EX=img.results
 
             POSTGRES_USER=postgres
             POSTGRES_PASSWORD=postgrespass
@@ -97,116 +87,29 @@ jobs:
             POSTGRES_PORT=5432
             EOF
 
-            # 3) docker-compose.yml (נכתב בשרת; אין מפתח 'version')
-            cat > docker-compose.yml <<'YAML'
-            services:
-              postgres:
-                image: postgres:${POSTGRES_VERSION:-16}
-                container_name: postgres
-                restart: unless-stopped
-                environment:
-                  POSTGRES_USER: ${POSTGRES_USER:-postgres}
-                  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespass}
-                  POSTGRES_DB: ${POSTGRES_DB:-predictions}
-                ports:
-                  - "${POSTGRES_PORT:-5432}:5432"
-                volumes:
-                  - postgres_data:/var/lib/postgresql/data
-                healthcheck:
-                  test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-predictions}"]
-                  interval: 10s
-                  timeout: 5s
-                  retries: 10
-
-              rabbitmq:
-                image: rabbitmq:4.0-management
-                container_name: rabbitmq
-                restart: unless-stopped
-                environment:
-                  RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-app}
-                  RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-secret}
-                ports:
-                  - "5672:5672"
-                  - "15672:15672"
-                healthcheck:
-                  test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-                  interval: 10s
-                  timeout: 5s
-                  retries: 12
-
-              yolo:
-                image: ${DOCKERHUB_USERNAME}/yolo:${YOLO_TAG:-latest}
-                container_name: yolo
-                restart: unless-stopped
-                ports:
-                  - "${YOLO_PORT:-8081}:8081"
-                volumes:
-                  - ./uploads:/app/uploads
-                environment:
-                  PYTHONUNBUFFERED: "1"
-                  AWS_REGION: ${AWS_REGION}
-                  AWS_S3_BUCKET: ${AWS_S3_BUCKET}
-                  DB_BACKEND: postgres
-                  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
-                  RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
-                  JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
-                  RESULTS_EX: ${RESULTS_EX:-img.results}
-                depends_on:
-                  postgres:
-                    condition: service_healthy
-                  rabbitmq:
-                    condition: service_healthy
-
-              yolo-worker:
-                image: ${DOCKERHUB_USERNAME}/yolo:${YOLO_TAG:-latest}
-                container_name: yolo-worker
-                restart: unless-stopped
-                volumes:
-                  - ./uploads:/app/uploads
-                environment:
-                  AWS_REGION: ${AWS_REGION}
-                  AWS_S3_BUCKET: ${AWS_S3_BUCKET}
-                  DB_BACKEND: postgres
-                  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
-                  RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
-                  JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
-                  RESULTS_EX: ${RESULTS_EX:-img.results}
-                depends_on:
-                  postgres:
-                    condition: service_healthy
-                  rabbitmq:
-                    condition: service_healthy
-                command: ["python", "-u", "worker_receive.py"]
-
-              ollama-ui:
-                image: ${DOCKERHUB_USERNAME}/ollama-ui:${OLLAMA_UI_IMG_TAG}
-                container_name: ollama-ui
-                restart: unless-stopped
-                ports:
-                  - "${OLLAMA_PORT:-3000}:3000"
-                environment:
-                  PORT: "3000"
-                  AWS_REGION: ${AWS_REGION}
-                  AWS_S3_BUCKET: ${AWS_S3_BUCKET}
-                  YOLO_SERVICE: http://yolo:8081
-                  RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
-                  JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
-                  RESULTS_EX: ${RESULTS_EX:-img.results}
-                depends_on:
-                  yolo:
-                    condition: service_started
-                  rabbitmq:
-                    condition: service_healthy
-                command: ["npm", "start", "--", "-H", "0.0.0.0"]
-
-            volumes:
-              postgres_data:
-            YAML
-
-            echo "=== Disk usage BEFORE PULL ==="
+            ##############################
+            # Cleanup before pulling images
+            ##############################
+            echo "=== Disk usage BEFORE ==="
             df -h || true
             sudo docker system df || true
 
+            # Stop all containers (note: may affect other services running on the server)
+            sudo docker stop $(sudo docker ps -aq) 2>/dev/null || true
+            # Aggressive Docker cleanup: unused images/containers/volumes
+            sudo docker system prune -af --volumes || true
+            # Clean build cache
+            sudo docker builder prune -af || true
+
+            # Clean apt cache to free space
+            sudo apt-get clean || true
+            sudo rm -rf /var/lib/apt/lists/* || true
+
+            echo "=== Disk usage AFTER CLEAN ==="
+            df -h || true
+            sudo docker system df || true
+
+            # Deployment
             sudo docker compose --env-file .env pull
             sudo docker compose --env-file .env down || true
             sudo docker compose --env-file .env up -d
@@ -275,8 +178,8 @@ jobs:
           Target.URL=http://${{ secrets.EC2_HOST }}:3000/
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
-          YOLO.Image=${{ secrets.DOCKERHUB_USERNAME }}/yolo:latest
-          Postgres.Image=postgres:16
+          YOLO.Image=tameer/yolo:991e7ebc1a6fbd6136517e56d68bdf843b749ef9-20250903-071354
+          Postgres.Image=postgres:15
           CI.Platform=GitHub Actions
           EOF
 
@@ -378,8 +281,8 @@ jobs:
           Target.URL=http://${{ secrets.EC2_HOST }}:3000/
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
-          YOLO.Image=${{ secrets.DOCKERHUB_USERNAME }}/yolo:latest
-          Postgres.Image=postgres:16
+          YOLO.Image=tameer/yolo:991e7ebc1a6fbd6136517e56d68bdf843b749ef9-20250903-071354
+          Postgres.Image=postgres:15
           CI.Platform=GitHub Actions
           EOF
 
@@ -400,9 +303,7 @@ jobs:
         with:
           github_token: ${{ secrets.UI_TESTING_GITHUB_TOKEN }}
           publish_dir: allure-history
-
-
-
+            
 
 
 
