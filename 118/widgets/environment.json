@@ -1,1 +1,0 @@
-[{"values":["http://108.129.85.76:3000/"],"name":"Target.URL"},{"values":["263d3844bbbe96ba80c7d91a8e74e5b00c9609ee"],"name":"Commit"},{"values":["tameer/ollama-ui:"],"name":"OllamaUI.Image"},{"values":["tameer/yolo:latest"],"name":"YOLO.Image"},{"values":["postgres:16"],"name":"Postgres.Image"},{"values":["GitHub Actions"],"name":"CI.Platform"}]
