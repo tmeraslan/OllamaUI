@@ -4,19 +4,19 @@ version: "3.9"
 
 services:
   postgres:
-    image: postgres:15
+    image: postgres:${POSTGRES_VERSION:-16}
     container_name: postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: pass
-      POSTGRES_DB: predictions
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespass}
+      POSTGRES_DB: ${POSTGRES_DB:-predictions}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-predictions}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-predictions}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -29,8 +29,8 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-app}
       RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-secret}
     ports:
-      - "5672:5672"    # AMQP
-      - "15672:15672"  # UI לניטור
+      - "5672:5672"
+      - "15672:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -38,13 +38,13 @@ services:
       retries: 12
 
   yolo:
-    image: tameer/yolo:0.0.5
+    image: tameer/yolo:latest
     container_name: yolo
     restart: unless-stopped
     ports:
-      - "8081:8081"
+      - "${YOLO_PORT:-8081}:8081"
     volumes:
-      - ./uploads:/app/uploads 
+      - ./uploads:/app/uploads
     environment:
       PYTHONUNBUFFERED: "1"
       AWS_REGION: ${AWS_REGION}
@@ -61,7 +61,7 @@ services:
         condition: service_healthy
 
   yolo-worker:
-    image: tameer/yolo:0.0.5
+    image: tameer/yolo:latest
     container_name: yolo-worker
     restart: unless-stopped
     volumes:
@@ -86,7 +86,7 @@ services:
     container_name: ollama-ui
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${OLLAMA_PORT:-3000}:3000"
     environment:
       PORT: "3000"
       AWS_REGION: ${AWS_REGION}
@@ -104,6 +104,7 @@ services:
 
 volumes:
   postgres_data:
+
 
 
 
