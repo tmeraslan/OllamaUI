@@ -1,7 +1,5 @@
 #docker-compose.yml
 
-version: "3.9"
-
 services:
   postgres:
     image: postgres:${POSTGRES_VERSION:-16}
@@ -38,7 +36,7 @@ services:
       retries: 12
 
   yolo:
-    image: tameer/yolo:latest
+    image: ${DOCKERHUB_USERNAME:-tameer}/yolo:${YOLO_TAG:-latest}
     container_name: yolo
     restart: unless-stopped
     ports:
@@ -61,7 +59,7 @@ services:
         condition: service_healthy
 
   yolo-worker:
-    image: tameer/yolo:latest
+    image: ${DOCKERHUB_USERNAME:-tameer}/yolo:${YOLO_TAG:-latest}
     container_name: yolo-worker
     restart: unless-stopped
     volumes:
@@ -82,7 +80,7 @@ services:
     command: ["python", "-u", "worker_receive.py"]
 
   ollama-ui:
-    image: ${DOCKERHUB_USERNAME}/ollama-ui:${OLLAMA_UI_IMG_TAG}
+    image: ${DOCKERHUB_USERNAME:-tameer}/ollama-ui:${OLLAMA_UI_IMG_TAG:-latest}
     container_name: ollama-ui
     restart: unless-stopped
     ports:
@@ -104,6 +102,7 @@ services:
 
 volumes:
   postgres_data:
+
 
 
 

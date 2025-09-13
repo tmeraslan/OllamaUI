@@ -6,7 +6,6 @@
 # # .github/workflows/e2e-testing.yml
 
 
-
 name: Simple Deploy to EC2
 
 on:
@@ -20,7 +19,7 @@ jobs:
       image_tag: ${{ steps.build_push.outputs.image_tag }}
 
     steps:
-      - name: Checkout
+      - name: Get code
         uses: actions/checkout@v4
 
       - name: Build and push Docker image
@@ -28,19 +27,12 @@ jobs:
         run: |
           echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
           TAG="${{ github.sha }}-$(date +%Y%m%d-%H%M%S)"
-          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui"
-
-          docker build -t "$IMAGE:$TAG" .
-          docker push "$IMAGE:$TAG"
-
-          # חשוב: גם latest כדי ש-"manifest unknown" לא יופיע באף סביבה
-          docker tag "$IMAGE:$TAG" "$IMAGE:latest"
-          docker push "$IMAGE:latest"
-
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:$TAG .
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:$TAG
           echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
           echo "image_tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Deploy on EC2 via SSH (write compose + up)
+      - name: Deploy on EC2 via SSH (free space first + write compose)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -50,8 +42,20 @@ jobs:
             set -euo pipefail
             cd /home/ubuntu
 
-            # התקן docker אם חסר (והפעל)
-            sudo apt-get remove -y podman-docker podman || true
+            # 0) EMERGENCY CLEANUP — לפני כתיבת קבצים (קריטי!)
+            sudo rm -rf /var/lib/apt/lists/* || true
+            sudo apt-get clean || true
+            sudo journalctl --vacuum-size=100M || true
+            sudo rm -rf /var/tmp/* /tmp/* || true
+            if command -v docker >/dev/null 2>&1; then
+              sudo docker stop $(sudo docker ps -aq) 2>/dev/null || true
+              sudo docker system prune -af --volumes || true
+              sudo docker builder prune -af || true
+            fi
+            df -h || true
+
+            # 1) התקנת Docker אם חסר + הפעלה
+            sudo apt-get purge -y podman-docker podman 2>/dev/null || true
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update -y
               sudo apt-get install -y ca-certificates curl gnupg
@@ -67,15 +71,21 @@ jobs:
             echo "${{ secrets.DOCKERHUB_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
             sudo mkdir -p uploads
 
-            # כותב .env ל-compose (נוצר בכל דיפלוי)
+            # 2) .env לדיפלוי
             cat > .env <<EOF
             DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
             OLLAMA_UI_IMG_TAG=${{ env.IMAGE_TAG }}
+            YOLO_TAG=latest
 
             YOLO_SERVICE=http://yolo:8081
 
             AWS_REGION=eu-west-1
             AWS_S3_BUCKET=tameer-yolo-images
+
+            RABBIT_USER=app
+            RABBIT_PASS=secret
+            JOBS_QUEUE=img_jobs
+            RESULTS_EX=img.results
 
             POSTGRES_USER=postgres
             POSTGRES_PASSWORD=postgrespass
@@ -87,7 +97,7 @@ jobs:
             POSTGRES_PORT=5432
             EOF
 
-            # כותב docker-compose.yml ישירות (heredoc עם ציטוט יחיד כדי למנוע הרחבות מוקדמות)
+            # 3) docker-compose.yml (נכתב בשרת; אין מפתח 'version')
             cat > docker-compose.yml <<'YAML'
             services:
               postgres:
@@ -125,7 +135,7 @@ jobs:
                   retries: 12
 
               yolo:
-                image: tameer/yolo:latest
+                image: ${DOCKERHUB_USERNAME}/yolo:${YOLO_TAG:-latest}
                 container_name: yolo
                 restart: unless-stopped
                 ports:
@@ -148,7 +158,7 @@ jobs:
                     condition: service_healthy
 
               yolo-worker:
-                image: tameer/yolo:latest
+                image: ${DOCKERHUB_USERNAME}/yolo:${YOLO_TAG:-latest}
                 container_name: yolo-worker
                 restart: unless-stopped
                 volumes:
@@ -193,15 +203,7 @@ jobs:
               postgres_data:
             YAML
 
-            echo "=== Disk usage BEFORE ==="
-            df -h || true
-            sudo docker system df || true
-
-            sudo docker stop $(sudo docker ps -aq) 2>/dev/null || true
-            sudo docker system prune -af --volumes || true
-            sudo docker builder prune -af || true
-
-            echo "=== Disk usage AFTER CLEAN ==="
+            echo "=== Disk usage BEFORE PULL ==="
             df -h || true
             sudo docker system df || true
 
@@ -273,12 +275,12 @@ jobs:
           Target.URL=http://${{ secrets.EC2_HOST }}:3000/
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
-          YOLO.Image=tameer/yolo:latest
+          YOLO.Image=${{ secrets.DOCKERHUB_USERNAME }}/yolo:latest
           Postgres.Image=postgres:16
           CI.Platform=GitHub Actions
           EOF
 
-      - name: Inject Allure matrix params
+      - name: Inject Allure matrix params (browser/resolution as test parameters)
         run: |
           cat > conftest.py << 'PY'
           import os, pytest
@@ -325,6 +327,80 @@ jobs:
             sleep 3
           done
           pytest --alluredir=allure-results tests/
+
+      - name: Upload Allure results as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: allure-results-${{ matrix.browser }}-${{ matrix.resolution.name }}
+          path: allure-results/
+          retention-days: 30
+
+  allure-report:
+    runs-on: ubuntu-latest
+    needs: selenium-matrix-tests
+    if: always()
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all Allure results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: allure-results-*
+          path: allure-results-downloaded
+          merge-multiple: false
+
+      - name: Merge all results into single directory (and set global environment)
+        run: |
+          mkdir -p allure-results
+          for dir in allure-results-downloaded/*/; do
+            if [ -d "$dir" ]; then
+              cp -r "$dir"* allure-results/ 2>/dev/null || true
+            fi
+          done
+
+          cat > allure-results/categories.json << 'EOF'
+          [
+            {"name": "Chrome",  "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*chrome.*"},
+            {"name": "Firefox", "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*firefox.*"},
+            {"name": "Desktop", "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*desktop.*"},
+            {"name": "Mobile",  "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*mobile.*"},
+            {"name": "Tablet",  "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*tablet.*"},
+            {"name": "Laptop",  "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*laptop.*"}
+          ]
+          EOF
+
+          cat > allure-results/environment.properties << EOF
+          Target.URL=http://${{ secrets.EC2_HOST }}:3000/
+          Commit=${{ github.sha }}
+          OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
+          YOLO.Image=${{ secrets.DOCKERHUB_USERNAME }}/yolo:latest
+          Postgres.Image=postgres:16
+          CI.Platform=GitHub Actions
+          EOF
+
+          echo "Allure files:"
+          ls -la allure-results || true
+
+      - name: Generate and Deploy Allure Report
+        uses: simple-elf/allure-report-action@master
+        with:
+          allure_results: allure-results
+          allure_report: allure-report
+          gh_pages: gh-pages
+          allure_history: allure-history
+          keep_reports: 20
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.UI_TESTING_GITHUB_TOKEN }}
+          publish_dir: allure-history
+
 
 
 
