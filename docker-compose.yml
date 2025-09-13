@@ -13,6 +13,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d predictions"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   rabbitmq:
     image: rabbitmq:4.0-management-alpine
@@ -24,15 +29,20 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   yolo:
-    image: tameer/yolo:0.0.2
+    image: tameer/yolo:0.0.5   # מומלץ לאחד גרסה עם ה-worker
     container_name: yolo
+    restart: unless-stopped
     ports:
       - "8081:8081"
     volumes:
       - ./uploads:/app/uploads
-    restart: unless-stopped
     environment:
       PYTHONUNBUFFERED: "1"
       AWS_REGION: eu-west-1
@@ -43,9 +53,8 @@ services:
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
     depends_on:
-      postgres
-      rabbitmq
-        
+      - postgres
+      - rabbitmq
 
   yolo-worker:
     image: tameer/yolo:0.0.5
@@ -62,10 +71,8 @@ services:
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
     depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+      - postgres
+      - rabbitmq
     command: ["python", "-u", "worker_receive.py"]
 
   ollama-ui:
@@ -73,7 +80,7 @@ services:
     container_name: ollama-ui
     restart: unless-stopped
     ports:
-       - "3000:3000"
+      - "3000:3000"
     environment:
       PORT: "3000"
       AWS_REGION: eu-west-1
@@ -83,14 +90,12 @@ services:
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
     depends_on:
-      yolo:
-        condition: service_started
-      rabbitmq:
-        condition: service_healthy
-    command: ["npm", "start", "--", "-H", "0.0.0.0"]
+      - yolo
+      - rabbitmq
 
 volumes:
   postgres_data:
+
 
 
 
