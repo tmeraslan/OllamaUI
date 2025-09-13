@@ -36,7 +36,7 @@ services:
       retries: 12
 
   yolo:
-    image: ${DOCKERHUB_USERNAME}/yolo:${YOLO_TAG:-latest}
+    image: tameer/yolo:0.0.5
     container_name: yolo
     restart: unless-stopped
     ports:
@@ -59,7 +59,7 @@ services:
         condition: service_healthy
 
   yolo-worker:
-    image: ${DOCKERHUB_USERNAME}/yolo:${YOLO_TAG:-latest}
+    image: tameer/yolo:0.0.5
     container_name: yolo-worker
     restart: unless-stopped
     volumes:
