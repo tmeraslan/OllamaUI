@@ -4,7 +4,6 @@
 
 
 # # .github/workflows/e2e-testing.yml
-
 name: Simple Deploy to EC2
 
 on:
@@ -30,24 +29,21 @@ jobs:
           echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
           echo "image_tag=$TAG" >> $GITHUB_OUTPUT
 
-      # אין צורך ב-SCP – ניצור/נעדכן קבצים ישירות בשרת
-      - name: Deploy on EC2 via SSH (cleanup + docker + compose up)
+      - name: Deploy on EC2 via SSH (cleanup + docker data-root + pre-pull + compose up)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           timeout: 120s
-          command_timeout: 40m
+          command_timeout: 45m
           script: |
             set -xeuo pipefail
             export DEBIAN_FRONTEND=noninteractive
             cd /home/ubuntu
 
-            echo "== Stop docker/containerd (ignore errors) =="
+            #### 0) Stop services & free space (avoid apt locks)
             sudo systemctl stop docker containerd 2>/dev/null || true
-
-            echo "== Stop apt timers & unattended-upgrades (avoid locks) =="
             sudo systemctl stop --now apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
             for i in {1..30}; do
               if sudo fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; then
@@ -57,7 +53,6 @@ jobs:
               fi
             done
 
-            echo "== Emergency cleanup to free space =="
             timeout 60s sudo journalctl --vacuum-time=3d || true
             timeout 60s sudo journalctl --vacuum-size=200M || true
             sudo find /var/log -type f -name "*.log" -size +10M -exec sudo truncate -s 0 {} \; || true
@@ -67,17 +62,16 @@ jobs:
             sudo apt-get autoremove -y || true
             sudo mkdir -p /var/lib/apt/lists/partial || true
 
+            #### 1) If root fs is too small, wipe old docker/containerd data
             FREE_KB=$(df --output=avail -k / | tail -1 || echo 0)
             echo "Free space (KB): $FREE_KB"
-            if [ "$FREE_KB" -lt 5242880 ]; then  # < 5GB
+            if [ "$FREE_KB" -lt 5242880 ]; then   # < 5GB
               echo "Low space on / – removing old Docker & Containerd data"
               sudo rm -rf /var/lib/docker /var/lib/containerd || true
             fi
 
-            echo "== apt update (with timeout) =="
+            #### 2) Install Docker (if missing)
             timeout 180s sudo apt-get update -y || true
-
-            echo "== Install/enable Docker if missing =="
             sudo apt-get remove -y podman-docker podman || true
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get install -y ca-certificates curl gnupg
@@ -89,13 +83,17 @@ jobs:
               timeout 600s sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
             fi
 
-            echo "== Docker daemon base config =="
+            #### 3) Move Docker data-root off / (to /home/ubuntu/docker-data)
             sudo mkdir -p /etc/docker
-            if [ ! -f /etc/docker/daemon.json ]; then
-              echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
-            fi
+            sudo mkdir -p /home/ubuntu/docker-data
+            cat | sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
+            {
+              "data-root": "/home/ubuntu/docker-data",
+              "log-driver": "json-file",
+              "log-opts": { "max-size": "10m", "max-file": "3" }
+            }
+            JSON
 
-            echo "== Start Docker (show logs on failure) =="
             sudo systemctl daemon-reload
             sudo systemctl enable docker || true
             sudo systemctl restart docker
@@ -105,14 +103,14 @@ jobs:
               exit 1
             fi
             docker --version
+            docker info | grep -E "Docker Root Dir|Driver" || true
+            df -h /home/ubuntu/docker-data || true
 
-            echo "== Docker login =="
+            #### 4) Docker login
             echo "${{ secrets.DOCKERHUB_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-            echo "== Prepare work dirs =="
+            #### 5) Write .env and docker-compose.yml
             sudo mkdir -p uploads
-
-            echo "== Write .env for compose (match docker-compose.yml) =="
             cat > .env <<EOF
             DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
             OLLAMA_UI_IMG_TAG=${{ env.IMAGE_TAG }}
@@ -138,11 +136,10 @@ jobs:
             POSTGRES_PORT=5432
             EOF
 
-            echo "== Write docker-compose.yml (server copy) =="
             cat > docker-compose.yml <<'YAML'
             services:
               postgres:
-                image: postgres:${POSTGRES_VERSION:-15}
+                image: postgres:${POSTGRES_VERSION:-15}-alpine
                 container_name: postgres
                 restart: unless-stopped
                 environment:
@@ -160,7 +157,7 @@ jobs:
                   retries: 10
 
               rabbitmq:
-                image: rabbitmq:4.0-management
+                image: rabbitmq:4.0-management-alpine
                 container_name: rabbitmq
                 restart: unless-stopped
                 environment:
@@ -244,13 +241,19 @@ jobs:
               postgres_data:
             YAML
 
-            echo "== Disk usage =="
+            echo "== Disk usage BEFORE pulls =="
             df -h || true
+            sudo docker system df || true
 
-            echo "== Compose pull & up (with timeouts) =="
-            timeout 600s sudo docker compose --env-file .env pull
+            #### 6) Pre-pull per image with timeouts (clear logs between pulls)
+            timeout 420s sudo docker pull postgres:${POSTGRES_VERSION:-15}-alpine
+            timeout 420s sudo docker pull rabbitmq:4.0-management-alpine
+            timeout 1500s sudo docker pull ${DOCKERHUB_USERNAME}/yolo:${YOLO_TAG:-latest}
+            timeout 900s  sudo docker pull ${DOCKERHUB_USERNAME}/ollama-ui:${OLLAMA_UI_IMG_TAG}
+
+            echo "== Compose up =="
             sudo docker compose --env-file .env down || true
-            timeout 600s sudo docker compose --env-file .env up -d
+            timeout 900s sudo docker compose --env-file .env up -d
             sudo docker compose --env-file .env ps
 
   selenium-matrix-tests:
@@ -317,7 +320,7 @@ jobs:
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
           YOLO.Image=${{ secrets.DOCKERHUB_USERNAME }}/yolo:latest
-          Postgres.Image=postgres:15
+          Postgres.Image=postgres:15-alpine
           CI.Platform=GitHub Actions
           EOF
 
@@ -420,7 +423,7 @@ jobs:
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
           YOLO.Image=${{ secrets.DOCKERHUB_USERNAME }}/yolo:latest
-          Postgres.Image=postgres:15
+          Postgres.Image=postgres:15-alpine
           CI.Platform=GitHub Actions
           EOF
 
@@ -441,6 +444,7 @@ jobs:
         with:
           github_token: ${{ secrets.UI_TESTING_GITHUB_TOKEN }}
           publish_dir: allure-history
+
 
 
 
