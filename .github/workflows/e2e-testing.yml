@@ -20,7 +20,7 @@ jobs:
       image_tag: ${{ steps.build_push.outputs.image_tag }}
 
     steps:
-      - name: Get code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Build and push Docker image
@@ -30,59 +30,17 @@ jobs:
           TAG="${{ github.sha }}-$(date +%Y%m%d-%H%M%S)"
           IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui"
 
-          # build tag
           docker build -t "$IMAGE:$TAG" .
-
-          # push tag
           docker push "$IMAGE:$TAG"
 
-          # ALSO tag & push :latest to למנוע manifest unknown
+          # חשוב: גם latest כדי ש-"manifest unknown" לא יופיע באף סביבה
           docker tag "$IMAGE:$TAG" "$IMAGE:latest"
           docker push "$IMAGE:latest"
 
           echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
           echo "image_tag=$TAG" >> $GITHUB_OUTPUT
 
-      # Preflight: ודא שיש הרשאות כתיבה ו-tar ב-EC2 (דרוש ל-scp action)
-      - name: Preflight on EC2
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            set -euxo pipefail
-            mkdir -p /home/ubuntu
-            command -v tar >/dev/null || (sudo apt-get update -y && sudo apt-get install -y tar)
-            df -h
-            touch /home/ubuntu/.scp_ok
-
-      - name: Copy docker-compose to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: 22
-          source: "docker-compose.yml"
-          target: "/home/ubuntu/"
-          overwrite: true
-          debug: true
-
-      # Fallback אם ה-SCP נכשל (יכתוב את הקובץ ב-heredoc)
-      - name: Fallback ship compose via SSH heredoc
-        if: failure()
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            cat > /home/ubuntu/docker-compose.yml <<'YAML'
-            version: "DO_NOT_USE" # placeholder; compose v2 מתעלם, אך אצלך כבר הורדנו בקובץ הרגיל
-            YAML
-
-      - name: Deploy on EC2 via SSH
+      - name: Deploy on EC2 via SSH (write compose + up)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -92,7 +50,7 @@ jobs:
             set -euo pipefail
             cd /home/ubuntu
 
-            # הסר Podman, התקן Docker אם חסר
+            # התקן docker אם חסר (והפעל)
             sudo apt-get remove -y podman-docker podman || true
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get update -y
@@ -109,7 +67,7 @@ jobs:
             echo "${{ secrets.DOCKERHUB_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
             sudo mkdir -p uploads
 
-            # .env שמריץ compose על השרת (נוצר בכל דיפלוי)
+            # כותב .env ל-compose (נוצר בכל דיפלוי)
             cat > .env <<EOF
             DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
             OLLAMA_UI_IMG_TAG=${{ env.IMAGE_TAG }}
@@ -129,6 +87,112 @@ jobs:
             POSTGRES_PORT=5432
             EOF
 
+            # כותב docker-compose.yml ישירות (heredoc עם ציטוט יחיד כדי למנוע הרחבות מוקדמות)
+            cat > docker-compose.yml <<'YAML'
+            services:
+              postgres:
+                image: postgres:${POSTGRES_VERSION:-16}
+                container_name: postgres
+                restart: unless-stopped
+                environment:
+                  POSTGRES_USER: ${POSTGRES_USER:-postgres}
+                  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespass}
+                  POSTGRES_DB: ${POSTGRES_DB:-predictions}
+                ports:
+                  - "${POSTGRES_PORT:-5432}:5432"
+                volumes:
+                  - postgres_data:/var/lib/postgresql/data
+                healthcheck:
+                  test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-predictions}"]
+                  interval: 10s
+                  timeout: 5s
+                  retries: 10
+
+              rabbitmq:
+                image: rabbitmq:4.0-management
+                container_name: rabbitmq
+                restart: unless-stopped
+                environment:
+                  RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-app}
+                  RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-secret}
+                ports:
+                  - "5672:5672"
+                  - "15672:15672"
+                healthcheck:
+                  test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+                  interval: 10s
+                  timeout: 5s
+                  retries: 12
+
+              yolo:
+                image: tameer/yolo:latest
+                container_name: yolo
+                restart: unless-stopped
+                ports:
+                  - "${YOLO_PORT:-8081}:8081"
+                volumes:
+                  - ./uploads:/app/uploads
+                environment:
+                  PYTHONUNBUFFERED: "1"
+                  AWS_REGION: ${AWS_REGION}
+                  AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+                  DB_BACKEND: postgres
+                  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
+                  RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
+                  JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
+                  RESULTS_EX: ${RESULTS_EX:-img.results}
+                depends_on:
+                  postgres:
+                    condition: service_healthy
+                  rabbitmq:
+                    condition: service_healthy
+
+              yolo-worker:
+                image: tameer/yolo:latest
+                container_name: yolo-worker
+                restart: unless-stopped
+                volumes:
+                  - ./uploads:/app/uploads
+                environment:
+                  AWS_REGION: ${AWS_REGION}
+                  AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+                  DB_BACKEND: postgres
+                  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
+                  RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
+                  JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
+                  RESULTS_EX: ${RESULTS_EX:-img.results}
+                depends_on:
+                  postgres:
+                    condition: service_healthy
+                  rabbitmq:
+                    condition: service_healthy
+                command: ["python", "-u", "worker_receive.py"]
+
+              ollama-ui:
+                image: ${DOCKERHUB_USERNAME}/ollama-ui:${OLLAMA_UI_IMG_TAG}
+                container_name: ollama-ui
+                restart: unless-stopped
+                ports:
+                  - "${OLLAMA_PORT:-3000}:3000"
+                environment:
+                  PORT: "3000"
+                  AWS_REGION: ${AWS_REGION}
+                  AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+                  YOLO_SERVICE: http://yolo:8081
+                  RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
+                  JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
+                  RESULTS_EX: ${RESULTS_EX:-img.results}
+                depends_on:
+                  yolo:
+                    condition: service_started
+                  rabbitmq:
+                    condition: service_healthy
+                command: ["npm", "start", "--", "-H", "0.0.0.0"]
+
+            volumes:
+              postgres_data:
+            YAML
+
             echo "=== Disk usage BEFORE ==="
             df -h || true
             sudo docker system df || true
@@ -136,8 +200,6 @@ jobs:
             sudo docker stop $(sudo docker ps -aq) 2>/dev/null || true
             sudo docker system prune -af --volumes || true
             sudo docker builder prune -af || true
-            sudo apt-get clean || true
-            sudo rm -rf /var/lib/apt/lists/* || true
 
             echo "=== Disk usage AFTER CLEAN ==="
             df -h || true
@@ -216,7 +278,7 @@ jobs:
           CI.Platform=GitHub Actions
           EOF
 
-      - name: Inject Allure matrix params (browser/resolution as test parameters)
+      - name: Inject Allure matrix params
         run: |
           cat > conftest.py << 'PY'
           import os, pytest
@@ -264,78 +326,6 @@ jobs:
           done
           pytest --alluredir=allure-results tests/
 
-      - name: Upload Allure results as artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: allure-results-${{ matrix.browser }}-${{ matrix.resolution.name }}
-          path: allure-results/
-          retention-days: 30
-
-  allure-report:
-    runs-on: ubuntu-latest
-    needs: selenium-matrix-tests
-    if: always()
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download all Allure results
-        uses: actions/download-artifact@v4
-        with:
-          pattern: allure-results-*
-          path: allure-results-downloaded
-          merge-multiple: false
-
-      - name: Merge all results into single directory (and set global environment)
-        run: |
-          mkdir -p allure-results
-          for dir in allure-results-downloaded/*/; do
-            if [ -d "$dir" ]; then
-              cp -r "$dir"* allure-results/ 2>/dev/null || true
-            fi
-          done
-
-          cat > allure-results/categories.json << 'EOF'
-          [
-            {"name": "Chrome",  "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*chrome.*"},
-            {"name": "Firefox", "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*firefox.*"},
-            {"name": "Desktop", "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*desktop.*"},
-            {"name": "Mobile",  "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*mobile.*"},
-            {"name": "Tablet",  "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*tablet.*"},
-            {"name": "Laptop",  "matchedStatuses": ["passed","failed","broken"], "messageRegex": ".*laptop.*"}
-          ]
-          EOF
-
-          cat > allure-results/environment.properties << EOF
-          Target.URL=http://${{ secrets.EC2_HOST }}:3000/
-          Commit=${{ github.sha }}
-          OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
-          YOLO.Image=tameer/yolo:latest
-          Postgres.Image=postgres:16
-          CI.Platform=GitHub Actions
-          EOF
-
-          echo "Allure files:"
-          ls -la allure-results || true
-
-      - name: Generate and Deploy Allure Report
-        uses: simple-elf/allure-report-action@master
-        with:
-          allure_results: allure-results
-          allure_report: allure-report
-          gh_pages: gh-pages
-          allure_history: allure-history
-          keep_reports: 20
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.UI_TESTING_GITHUB_TOKEN }}
-          publish_dir: allure-history
 
 
 
