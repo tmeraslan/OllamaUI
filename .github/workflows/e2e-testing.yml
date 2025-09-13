@@ -5,7 +5,6 @@
 
 # # .github/workflows/e2e-testing.yml
 
-
 name: Simple Deploy to EC2
 
 on:
@@ -21,7 +20,7 @@ jobs:
       - name: Get code
         uses: actions/checkout@v4
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image (ollama-ui)
         id: build_push
         run: |
           echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
@@ -31,80 +30,89 @@ jobs:
           echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
           echo "image_tag=$TAG" >> $GITHUB_OUTPUT
 
-      # ביטלנו את שלב ה-SCP – ניצור את הקבצים על השרת בשלב ה-SSH
-
-      - name: Deploy on EC2 via SSH (free space + reinstall/start docker + write files + compose up)
+      # אין צורך ב-SCP – ניצור/נעדכן קבצים ישירות בשרת
+      - name: Deploy on EC2 via SSH (cleanup + docker + compose up)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 120s
+          command_timeout: 40m
           script: |
-            set -euo pipefail
+            set -xeuo pipefail
+            export DEBIAN_FRONTEND=noninteractive
             cd /home/ubuntu
 
-            echo "== Emergency cleanup to free space =="
-            # עצירת Docker/Containerd אם רצים
+            echo "== Stop docker/containerd (ignore errors) =="
             sudo systemctl stop docker containerd 2>/dev/null || true
 
-            # ניקוי לוגים וקבצי tmp
-            sudo journalctl --vacuum-time=3d || true
-            sudo journalctl --vacuum-size=150M || true
+            echo "== Stop apt timers & unattended-upgrades (avoid locks) =="
+            sudo systemctl stop --now apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
+            for i in {1..30}; do
+              if sudo fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; then
+                echo "waiting apt locks... ($i)"; sleep 2
+              else
+                break
+              fi
+            done
+
+            echo "== Emergency cleanup to free space =="
+            timeout 60s sudo journalctl --vacuum-time=3d || true
+            timeout 60s sudo journalctl --vacuum-size=200M || true
             sudo find /var/log -type f -name "*.log" -size +10M -exec sudo truncate -s 0 {} \; || true
             sudo rm -rf /var/tmp/* /tmp/* || true
-
-            # ניקוי apt
             sudo rm -rf /var/lib/apt/lists/* || true
             sudo apt-get clean || true
             sudo apt-get autoremove -y || true
             sudo mkdir -p /var/lib/apt/lists/partial || true
-            sudo apt-get update -y || true
 
-            # אם אין מספיק מקום – מחיקה אגרסיבית של דאטה ישן של Docker/Containerd
-            FREE_KB=$(df --output=avail -k / | tail -1)
-            if [ "${FREE_KB}" -lt 2097152 ]; then # פחות מ-2GB
+            FREE_KB=$(df --output=avail -k / | tail -1 || echo 0)
+            echo "Free space (KB): $FREE_KB"
+            if [ "$FREE_KB" -lt 5242880 ]; then  # < 5GB
               echo "Low space on / – removing old Docker & Containerd data"
               sudo rm -rf /var/lib/docker /var/lib/containerd || true
             fi
 
-            echo "== Install/enable Docker =="
-            # הסרה שקטה של podman אם יש (לא חובה)
-            sudo apt-get remove -y podman-docker podman || true
+            echo "== apt update (with timeout) =="
+            timeout 180s sudo apt-get update -y || true
 
+            echo "== Install/enable Docker if missing =="
+            sudo apt-get remove -y podman-docker podman || true
             if ! command -v docker >/dev/null 2>&1; then
               sudo apt-get install -y ca-certificates curl gnupg
               sudo install -m 0755 -d /etc/apt/keyrings
               curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
               echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release; echo $VERSION_CODENAME) stable" \
                 | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-              sudo apt-get update -y
-              sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+              timeout 180s sudo apt-get update -y || true
+              timeout 600s sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
             fi
 
-            # וידוא תקיית קונפיג לדוקר וקובץ daemon.json בסיסי (לא חובה, אבל טוב שיהיה)
+            echo "== Docker daemon base config =="
             sudo mkdir -p /etc/docker
             if [ ! -f /etc/docker/daemon.json ]; then
               echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
             fi
 
+            echo "== Start Docker (show logs on failure) =="
             sudo systemctl daemon-reload
-            sudo systemctl enable docker
+            sudo systemctl enable docker || true
             sudo systemctl restart docker
-
-            # בדיקת מצב – אם לא רץ, נציג לוגים ונכשל
             if ! sudo systemctl is-active --quiet docker; then
               echo "Docker service is not active. Recent logs:"
               sudo journalctl -u docker -n 200 --no-pager || true
               exit 1
             fi
+            docker --version
 
-            # Login לדוקר-האב
+            echo "== Docker login =="
             echo "${{ secrets.DOCKERHUB_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-            # יצירת תיקיות עבודה
+            echo "== Prepare work dirs =="
             sudo mkdir -p uploads
 
-            echo "== Write .env for compose =="
+            echo "== Write .env for compose (match docker-compose.yml) =="
             cat > .env <<EOF
             DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
             OLLAMA_UI_IMG_TAG=${{ env.IMAGE_TAG }}
@@ -120,33 +128,33 @@ jobs:
             JOBS_QUEUE=img_jobs
             RESULTS_EX=img.results
 
-            POSTGRES_USER=postgres
-            POSTGRES_PASSWORD=postgrespass
+            POSTGRES_USER=user
+            POSTGRES_PASSWORD=pass
             POSTGRES_DB=predictions
-            POSTGRES_VERSION=16
+            POSTGRES_VERSION=15
 
             YOLO_PORT=8081
             OLLAMA_PORT=3000
             POSTGRES_PORT=5432
             EOF
 
-            echo "== Write docker-compose.yml =="
+            echo "== Write docker-compose.yml (server copy) =="
             cat > docker-compose.yml <<'YAML'
             services:
               postgres:
-                image: postgres:${POSTGRES_VERSION:-16}
+                image: postgres:${POSTGRES_VERSION:-15}
                 container_name: postgres
                 restart: unless-stopped
                 environment:
-                  POSTGRES_USER: ${POSTGRES_USER:-postgres}
-                  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespass}
+                  POSTGRES_USER: ${POSTGRES_USER:-user}
+                  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
                   POSTGRES_DB: ${POSTGRES_DB:-predictions}
                 ports:
                   - "${POSTGRES_PORT:-5432}:5432"
                 volumes:
                   - postgres_data:/var/lib/postgresql/data
                 healthcheck:
-                  test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-predictions}"]
+                  test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-predictions}"]
                   interval: 10s
                   timeout: 5s
                   retries: 10
@@ -180,7 +188,7 @@ jobs:
                   AWS_REGION: ${AWS_REGION}
                   AWS_S3_BUCKET: ${AWS_S3_BUCKET}
                   DB_BACKEND: postgres
-                  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
+                  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@postgres:5432/${POSTGRES_DB:-predictions}
                   RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
                   JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
                   RESULTS_EX: ${RESULTS_EX:-img.results}
@@ -200,7 +208,7 @@ jobs:
                   AWS_REGION: ${AWS_REGION}
                   AWS_S3_BUCKET: ${AWS_S3_BUCKET}
                   DB_BACKEND: postgres
-                  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespass}@postgres:5432/${POSTGRES_DB:-predictions}
+                  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@postgres:5432/${POSTGRES_DB:-predictions}
                   RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
                   JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
                   RESULTS_EX: ${RESULTS_EX:-img.results}
@@ -239,10 +247,10 @@ jobs:
             echo "== Disk usage =="
             df -h || true
 
-            echo "== Compose pull & up =="
-            sudo docker compose --env-file .env pull
+            echo "== Compose pull & up (with timeouts) =="
+            timeout 600s sudo docker compose --env-file .env pull
             sudo docker compose --env-file .env down || true
-            sudo docker compose --env-file .env up -d
+            timeout 600s sudo docker compose --env-file .env up -d
             sudo docker compose --env-file .env ps
 
   selenium-matrix-tests:
@@ -309,7 +317,7 @@ jobs:
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
           YOLO.Image=${{ secrets.DOCKERHUB_USERNAME }}/yolo:latest
-          Postgres.Image=postgres:16
+          Postgres.Image=postgres:15
           CI.Platform=GitHub Actions
           EOF
 
@@ -412,7 +420,7 @@ jobs:
           Commit=${{ github.sha }}
           OllamaUI.Image=${{ secrets.DOCKERHUB_USERNAME }}/ollama-ui:${{ needs.deploy.outputs.image_tag }}
           YOLO.Image=${{ secrets.DOCKERHUB_USERNAME }}/yolo:latest
-          Postgres.Image=postgres:16
+          Postgres.Image=postgres:15
           CI.Platform=GitHub Actions
           EOF
 

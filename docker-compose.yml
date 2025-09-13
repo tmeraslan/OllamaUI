@@ -2,19 +2,19 @@
 
 services:
   postgres:
-    image: postgres:15
+    image: postgres:${POSTGRES_VERSION:-15}
     container_name: postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: pass
-      POSTGRES_DB: predictions
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
+      POSTGRES_DB: ${POSTGRES_DB:-predictions}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-predictions}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-predictions}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -36,19 +36,19 @@ services:
       retries: 12
 
   yolo:
-    image: tameer/yolo:0.0.5
+    image: ${DOCKERHUB_USERNAME}/yolo:${YOLO_TAG:-latest}
     container_name: yolo
+    restart: unless-stopped
     ports:
-      - "8081:8081"
+      - "${YOLO_PORT:-8081}:8081"
     volumes:
       - ./uploads:/app/uploads
-    restart: unless-stopped
     environment:
       PYTHONUNBUFFERED: "1"
       AWS_REGION: ${AWS_REGION}
       AWS_S3_BUCKET: ${AWS_S3_BUCKET}
       DB_BACKEND: postgres
-      DATABASE_URL: postgresql+psycopg2://user:pass@postgres:5432/predictions
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@postgres:5432/${POSTGRES_DB:-predictions}
       RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
@@ -59,7 +59,7 @@ services:
         condition: service_healthy
 
   yolo-worker:
-    image: tameer/yolo:0.0.5
+    image: ${DOCKERHUB_USERNAME}/yolo:${YOLO_TAG:-latest}
     container_name: yolo-worker
     restart: unless-stopped
     volumes:
@@ -68,7 +68,7 @@ services:
       AWS_REGION: ${AWS_REGION}
       AWS_S3_BUCKET: ${AWS_S3_BUCKET}
       DB_BACKEND: postgres
-      DATABASE_URL: postgresql+psycopg2://user:pass@postgres:5432/predictions
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@postgres:5432/${POSTGRES_DB:-predictions}
       RABBIT_URL: amqp://${RABBIT_USER:-app}:${RABBIT_PASS:-secret}@rabbitmq:5672
       JOBS_QUEUE: ${JOBS_QUEUE:-img_jobs}
       RESULTS_EX: ${RESULTS_EX:-img.results}
@@ -84,7 +84,7 @@ services:
     container_name: ollama-ui
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${OLLAMA_PORT:-3000}:3000"
     environment:
       PORT: "3000"
       AWS_REGION: ${AWS_REGION}
